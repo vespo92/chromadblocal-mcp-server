@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# ChromaDB data
+chromadb-data/
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bun-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Build outputs
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backup files
+*.backup
+*.bak
+
+# Lock files (keep package-lock.json if using npm)
+yarn.lock
+# bun.lock is included by default, uncomment if you want to ignore it
+# bun.lock
+
+# We need to ignore node_modules properly
+node_modules
