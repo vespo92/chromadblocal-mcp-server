@@ -26,7 +26,7 @@ A Model Context Protocol (MCP) server that gives AI assistants persistent memory
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/chromadb-mcp-server.git
+   git clone https://github.com//vespo92/chromadblocal-mcp-server.git
    cd chromadb-mcp-server
    ```
 
