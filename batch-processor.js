@@ -4,14 +4,14 @@
  * Fast Batch File Processor for ChromaDB
  *
  * Handles rapid ingestion of:
- * - Photos (JPEG, PNG, HEIC, RAW)
+ * - Photos (JPEG, PNG, HEIC, RAW) with EXIF extraction
  * - CAD files (DXF, DWG, STEP, STL, OBJ)
  * - Documents (PDF, TXT, MD, JSON, YAML)
  * - Code files (JS, TS, PY, etc.)
  *
  * Features:
  * - Parallel processing with configurable concurrency
- * - Automatic metadata extraction
+ * - Automatic metadata extraction + EXIF for photos
  * - Progress tracking
  * - Temporary collections for quick load/unload
  */
@@ -19,6 +19,15 @@
 import { readdir, stat, readFile } from 'fs/promises';
 import { join, extname, basename, dirname, relative } from 'path';
 import { createHash } from 'crypto';
+
+// Lazy load EXIF extractor to avoid circular deps
+let exifExtractor = null;
+async function getExifExtractor() {
+  if (!exifExtractor) {
+    exifExtractor = await import('./exif-extractor.js');
+  }
+  return exifExtractor;
+}
 
 // File type configurations
 export const FILE_TYPES = {
@@ -106,8 +115,8 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// Extract EXIF-like metadata from images (basic info without external deps)
-async function extractImageMetadata(filePath) {
+// Extract EXIF-like metadata from images (with full EXIF for JPEG/TIFF)
+async function extractImageMetadata(filePath, includeExif = true) {
   const base = await extractFileMetadata(filePath);
   const ext = extname(filePath).toLowerCase();
 
@@ -134,6 +143,52 @@ async function extractImageMetadata(filePath) {
           info.width = buffer.readUInt16BE(i + 7);
           break;
         }
+      }
+    }
+
+    // Extract full EXIF data for supported formats
+    if (includeExif && ['.jpg', '.jpeg', '.tiff', '.tif'].includes(ext)) {
+      try {
+        const exifModule = await getExifExtractor();
+        const exif = await exifModule.extractExif(filePath);
+
+        if (exif.hasExif) {
+          // Add camera info
+          if (exif.camera?.make) info.camera_make = exif.camera.make;
+          if (exif.camera?.model) info.camera_model = exif.camera.model;
+
+          // Add lens info
+          if (exif.lens?.model) info.lens_model = exif.lens.model;
+          if (exif.lens?.focalLength) info.focal_length = exif.lens.focalLength;
+          if (exif.lens?.focalLength35mm) info.focal_length_35mm = exif.lens.focalLength35mm;
+
+          // Add exposure info
+          if (exif.exposure?.aperture) info.aperture = exif.exposure.aperture;
+          if (exif.exposure?.time) info.shutter_speed = exif.exposure.time;
+          if (exif.exposure?.iso) info.iso = exif.exposure.iso;
+          if (exif.exposure?.flash) info.flash = exif.exposure.flash;
+
+          // Add date/time
+          if (exif.datetime?.original) info.date_taken = exif.datetime.original;
+
+          // Add GPS
+          if (exif.gps) {
+            info.gps_latitude = exif.gps.latitude;
+            info.gps_longitude = exif.gps.longitude;
+            info.gps_location = `${exif.gps.latitude}, ${exif.gps.longitude}`;
+            if (exif.gps.altitude) info.gps_altitude = exif.gps.altitude;
+          }
+
+          // Use EXIF dimensions if available
+          if (exif.image?.width) info.width = exif.image.width;
+          if (exif.image?.height) info.height = exif.image.height;
+          if (exif.image?.orientation) info.orientation = exif.image.orientation;
+
+          info.has_exif = true;
+        }
+      } catch (exifError) {
+        // EXIF extraction failed, continue with basic info
+        info.exif_error = exifError.message;
       }
     }
 

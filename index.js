@@ -22,12 +22,31 @@ import {
   generateDocId
 } from './batch-processor.js';
 
+// EXIF extraction
+import { extractExif, exifToSummary, exifToMetadata } from './exif-extractor.js';
+
+// Watch folder
+import {
+  startWatcher,
+  stopWatcher,
+  listWatchers,
+  getWatcherStatus
+} from './watch-folder.js';
+
+// Duplicate detection
+import {
+  findDuplicates,
+  findCollectionDuplicates,
+  compareFiles,
+  generateReport
+} from './duplicate-detector.js';
+
 class ChromaContextMCP {
   constructor() {
     this.server = new Server(
       {
         name: 'chromadb-context',
-        version: '2.0.0',
+        version: '3.0.0',
       },
       {
         capabilities: {
@@ -836,6 +855,224 @@ class ChromaContextMCP {
           };
         }
 
+        // ============================================
+        // EXIF EXTRACTION TOOLS
+        // ============================================
+
+        case 'extract_exif': {
+          const { path: filePath } = args;
+
+          try {
+            const exif = await extractExif(filePath);
+
+            if (!exif.hasExif) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    file: filePath,
+                    hasExif: false,
+                    reason: exif.reason || 'No EXIF data found'
+                  }, null, 2),
+                }],
+              };
+            }
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  file: filePath,
+                  hasExif: true,
+                  ...exif
+                }, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error extracting EXIF: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        // ============================================
+        // WATCH FOLDER TOOLS
+        // ============================================
+
+        case 'watch_folder': {
+          const {
+            path: watchPath,
+            collection = 'auto_ingest',
+            categories = null,
+            extensions = null,
+            recursive = true,
+            include_exif = true
+          } = args;
+
+          try {
+            const client = await this.getLocalClient();
+            const result = await startWatcher(watchPath, {
+              collection,
+              categories: categories ? categories.split(',').map(c => c.trim()) : null,
+              extensions: extensions ? extensions.split(',').map(e => e.trim()) : null,
+              recursive,
+              includeExif: include_exif
+            }, client);
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error starting watcher: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        case 'stop_watch': {
+          const { path: watchPath } = args;
+
+          try {
+            const result = await stopWatcher(watchPath);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error stopping watcher: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        case 'list_watchers': {
+          const watchers = listWatchers();
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                active_watchers: watchers.length,
+                watchers
+              }, null, 2),
+            }],
+          };
+        }
+
+        // ============================================
+        // DUPLICATE DETECTION TOOLS
+        // ============================================
+
+        case 'find_duplicates': {
+          const {
+            path: dirPath,
+            recursive = true,
+            categories = null,
+            extensions = null,
+            hash_method = 'partial',
+            max_files = 2000
+          } = args;
+
+          try {
+            console.error(`🔍 Scanning for duplicates in ${dirPath}...`);
+
+            const result = await findDuplicates(dirPath, {
+              recursive,
+              categories: categories ? categories.split(',').map(c => c.trim()) : null,
+              extensions: extensions ? extensions.split(',').map(e => e.trim()) : null,
+              hashMethod: hash_method,
+              maxFiles: max_files,
+              onProgress: (p) => {
+                if (p.processed % 100 === 0) {
+                  console.error(`⏳ ${p.phase}: ${p.processed}/${p.total}`);
+                }
+              }
+            });
+
+            console.error(`✅ Found ${result.duplicateGroups} duplicate groups`);
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  ...result,
+                  groups: result.groups.slice(0, 20), // Limit output
+                  hasMore: result.groups.length > 20
+                }, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error finding duplicates: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        case 'compare_files': {
+          const { file1, file2 } = args;
+
+          try {
+            const result = await compareFiles(file1, file2);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error comparing files: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
+        case 'find_collection_duplicates': {
+          const { collection } = args;
+
+          try {
+            const client = await this.getLocalClient();
+            const result = await findCollectionDuplicates(client, collection);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              }],
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Error checking collection duplicates: ${error.message}`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -1149,6 +1386,152 @@ class ChromaContextMCP {
               properties: {},
             },
           },
+          // ============================================
+          // EXIF EXTRACTION TOOLS
+          // ============================================
+          {
+            name: 'extract_exif',
+            description: 'Extract detailed EXIF metadata from photos (camera, lens, exposure, GPS location, date taken).',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Path to the image file (JPEG or TIFF)',
+                },
+              },
+              required: ['path'],
+            },
+          },
+          // ============================================
+          // WATCH FOLDER TOOLS
+          // ============================================
+          {
+            name: 'watch_folder',
+            description: 'Start watching a folder for new files and auto-ingest them into ChromaDB. Perfect for incoming photo dumps.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Folder path to watch',
+                },
+                collection: {
+                  type: 'string',
+                  description: 'Target collection for auto-ingested files (default: auto_ingest)',
+                },
+                categories: {
+                  type: 'string',
+                  description: 'File categories to watch: images, cad, documents, data, code',
+                },
+                extensions: {
+                  type: 'string',
+                  description: 'Specific extensions to watch (e.g., ".jpg,.png")',
+                },
+                recursive: {
+                  type: 'boolean',
+                  description: 'Watch subdirectories (default: true)',
+                },
+                include_exif: {
+                  type: 'boolean',
+                  description: 'Extract EXIF from photos (default: true)',
+                },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'stop_watch',
+            description: 'Stop watching a folder.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Folder path to stop watching',
+                },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'list_watchers',
+            description: 'List all active folder watchers.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+            },
+          },
+          // ============================================
+          // DUPLICATE DETECTION TOOLS
+          // ============================================
+          {
+            name: 'find_duplicates',
+            description: 'Find duplicate files in a directory using file hashing. Identifies wasted space from duplicate photos, downloads, etc.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'Directory to scan for duplicates',
+                },
+                recursive: {
+                  type: 'boolean',
+                  description: 'Include subdirectories (default: true)',
+                },
+                categories: {
+                  type: 'string',
+                  description: 'File categories to check: images, cad, documents, data, code',
+                },
+                extensions: {
+                  type: 'string',
+                  description: 'Specific extensions to check',
+                },
+                hash_method: {
+                  type: 'string',
+                  description: 'Hash method: "partial" (fast), "full" (thorough), "perceptual" (images)',
+                  enum: ['partial', 'full', 'perceptual'],
+                },
+                max_files: {
+                  type: 'number',
+                  description: 'Maximum files to scan (default: 2000)',
+                },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'compare_files',
+            description: 'Compare two specific files to check if they are duplicates.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                file1: {
+                  type: 'string',
+                  description: 'Path to first file',
+                },
+                file2: {
+                  type: 'string',
+                  description: 'Path to second file',
+                },
+              },
+              required: ['file1', 'file2'],
+            },
+          },
+          {
+            name: 'find_collection_duplicates',
+            description: 'Find duplicate entries within a ChromaDB collection.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                collection: {
+                  type: 'string',
+                  description: 'Collection name to check',
+                },
+              },
+              required: ['collection'],
+            },
+          },
         ],
       };
     });
@@ -1157,7 +1540,7 @@ class ChromaContextMCP {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('ChromaDB Context MCP server v2.0.0 running with intelligent routing');
+    console.error('ChromaDB Context MCP server v3.0.0 running - EXIF, Watch Folders, Duplicate Detection enabled');
     
     // Initialize environment on startup
     if (this.routerEnabled) {
